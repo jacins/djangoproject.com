@@ -1,10 +1,13 @@
 certifi==14.05.14
-Django==1.8.4
-django-contact-form==1.0
-django-flat-theme==0.9.3
-django-hosts==1.2
+# Django==1.8.4
+-e git://github.com/django/django.git#egg=django
+# django-contact-form==1.0
+-e git://github.com/ubernostrum/django-contact-form.git#egg=django-contact-form
+# django-hosts==1.2
+-e git://github.com/timgraham/django-hosts.git@django1.9#egg=django-hosts
 django-push==0.7
-django-registration-redux==1.2
+# django-registration-redux==1.2
+-e git://github.com/macropin/django-registration.git#egg=django-registration
 django-secure==1.0.1
 elasticsearch-dsl==0.0.4
 docutils==0.11
