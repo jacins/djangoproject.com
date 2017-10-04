@@ -42,13 +42,8 @@ class ViewTests(TestCase):
     def test_metric_404(self):
         request = self.factory.get(reverse('metric-detail', args=['new-tickets-week'],
                                            host='dashboard'))
-        self.assertRaisesRegexp(
-            Http404,
-            'Could not find metric with slug [\w-]+',
-            metric_detail,
-            request,
-            '404'
-        )
+        with self.assertRaisesRegex(Http404, 'Could not find metric with slug [\w-]+'):
+            metric_detail(request, '404')
 
     def test_metric_json(self):
         TracTicketMetric.objects.get(slug='new-tickets-week').data.create(measurement=42)
@@ -59,7 +54,7 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class MetricMixin(object):
+class MetricMixin:
 
     def test_str(self):
         self.assertEqual(str(self.instance), self.instance.name)
@@ -73,7 +68,7 @@ class TracTicketMetricTestCase(TestCase, MetricMixin):
     fixtures = ['dashboard_test_data']
 
     def setUp(self):
-        super(TracTicketMetricTestCase, self).setUp()
+        super().setUp()
         self.instance = TracTicketMetric.objects.last()
 
     @mock.patch('xmlrpc.client.ServerProxy')
@@ -84,11 +79,11 @@ class TracTicketMetricTestCase(TestCase, MetricMixin):
 
 class RSSFeedMetricTestCase(TestCase, MetricMixin):
     fixtures = ['dashboard_test_data']
-    feed_url = 'http://code.djangoproject.com/timeline?changeset=on&max=0&daysback=7&format=rss'
+    feed_url = 'https://code.djangoproject.com/timeline?changeset=on&max=0&daysback=7&format=rss'
     fixtures_path = os.path.join(os.path.dirname(__file__), 'fixtures', 'rss_feed_metric.xml')
 
     def setUp(self):
-        super(RSSFeedMetricTestCase, self).setUp()
+        super().setUp()
         self.instance = RSSFeedMetric.objects.last()
 
     @requests_mock.mock()
@@ -105,7 +100,7 @@ class GithubItemCountMetricTestCase(TestCase, MetricMixin):
     api_url2 = 'https://api.github.com/repos/django/django/pulls?state=closed&per_page=100&page=2'
 
     def setUp(self):
-        super(GithubItemCountMetricTestCase, self).setUp()
+        super().setUp()
         self.instance = GithubItemCountMetric.objects.last()
 
     @requests_mock.mock()

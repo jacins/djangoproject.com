@@ -1,7 +1,19 @@
 {% extends 'fundraising/index.html' %}
 {% load staticfiles %}
 
+{% block messages %}
+
+  {% if messages %}
+    {% for message in messages %}
+    <p>{{ message }}</p>
+    {% endfor %}
+    <hr>
+  {% endif %}
+
+{% endblock %}
+
 {% block content %}
+
 <h1>Manage your donations to the Django Software Foundation</h1>
 <p>Your support is <strong>invaluable</strong> to continue the rapid development
   of Django and helps the <strong>Django Fellowship</strong> program in particular.
@@ -17,13 +29,13 @@
   <p class="submit">
     <input type="submit" class="cta" value="Save &rarr;">
   </p>
-
+  {# Always include to avoid "Management form has been tampered with" if no recurring donations exist #}
+  {{ modify_donations_formset.management_form }}
   {% if recurring_donations %}
     <hr />
     <h2>Modify your recurring donations</h2>
     <p>Update the time interval or amount of your recurring donation here:</p>
     {% for form in modify_donations_formset %}
-      <h3>{{ form.instance.campaign }}</h3>
       {% include 'fundraising/includes/_form.html' %}
       <div class="change-card-container">
         <input type="button" value="Change card details" class="change-card cta outline inline"
@@ -31,24 +43,28 @@
         <span class="change-card-result"></span>
       </div>
     {% endfor %}
-    {{ modify_donations_formset.management_form }}
     <p class="submit">
       <input type="submit" class="cta" value="Save &rarr;">
     </p>
-
+</form>
     <hr />
     <h2>Cancel your recurring donations</h2>
     <p>You can cancel your recurring donation to the Django Software Foundation anytime.</p>
     <ul>
     {% for donation in recurring_donations %}
       <li>
-        Your {{ donation.interval }} recurring donation of ${{ donation.subscription_amount }} to {{ donation.campaign.name }}:
-        <a href="{% url 'fundraising:cancel-donation' hero.pk donation.pk %}">cancel this donation</a>
+        Your {{ donation.interval }} recurring donation of ${{ donation.subscription_amount }}.
+        <form method="POST" action="{% url 'fundraising:cancel-donation' hero.pk %}">
+          {% csrf_token %}
+          <input name="donation" type="hidden" value="{{ donation.pk }}">
+          <input type="submit" value="cancel this donation">
+        </form>
       </li>
     {% endfor %}
     </ul>
-  {% endif %}
+  {% else %}
 </form>
+  {% endif %}
 {% endblock %}
 
 {% block content-extra %}{% endblock %}

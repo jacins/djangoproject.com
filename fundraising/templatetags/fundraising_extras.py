@@ -7,7 +7,11 @@ from django.template.defaultfilters import floatformat
 
 from fundraising.forms import DonateForm
 from fundraising.models import (
-    DEFAULT_DONATION_AMOUNT, DISPLAY_LOGO_AMOUNT, DjangoHero, Donation,
+    DEFAULT_DONATION_AMOUNT, DISPLAY_DONOR_DAYS, GOAL_AMOUNT, GOAL_START_DATE,
+    LEADERSHIP_LEVEL_AMOUNT, DjangoHero, InKindDonor, Payment,
+)
+from members.models import (
+    CORPORATE_MEMBERSHIP_AMOUNTS, CorporateMember, Invoice,
 )
 
 register = template.Library()
@@ -27,8 +31,10 @@ def as_percentage(part, total):
 @register.inclusion_tag('fundraising/includes/donation_snippet.html')
 def donation_snippet():
     try:
-        donation = DjangoHero.objects.filter(approved=True, is_visible=True).order_by('?')[:1]
-        donation = donation.annotate(donated_amount=models.Sum('donation__payment__amount')).get()
+        donation = DjangoHero.objects.filter(
+            approved=True,
+            is_visible=True,
+        ).exclude(name='').order_by('?')[:1].get()
     except DjangoHero.DoesNotExist:
         donation = None
 
@@ -36,31 +42,42 @@ def donation_snippet():
 
 
 @register.inclusion_tag('fundraising/includes/donation_form_with_heart.html', takes_context=True)
-def donation_form_with_heart(context, campaign):
+def donation_form_with_heart(context):
     user = context['user']
-    donated_amount = Donation.objects.filter(campaign=campaign).aggregate(models.Sum('payment__amount'))
-    total_donors = DjangoHero.objects.filter(donation__campaign=campaign).count()
+    donated_amount = Payment.objects.filter(date__gte=GOAL_START_DATE).aggregate(models.Sum('amount'))['amount__sum'] or 0
+    donated_amount += Invoice.objects.filter(paid_date__gte=GOAL_START_DATE).aggregate(models.Sum('amount'))['amount__sum'] or 0
+
+    total_donors = DjangoHero.objects.filter(donation__payment__date__gte=GOAL_START_DATE).distinct().count()
     form = DonateForm(initial={
         'amount': DEFAULT_DONATION_AMOUNT,
-        'campaign': campaign,
     })
 
     return {
-        'campaign': campaign,
-        'donated_amount': donated_amount['payment__amount__sum'] or 0,
+        'goal_amount': GOAL_AMOUNT,
+        'goal_start_date': GOAL_START_DATE,
+        'donated_amount': donated_amount,
         'total_donors': total_donors,
         'form': form,
-        'display_logo_amount': DISPLAY_LOGO_AMOUNT,
+        'display_logo_amount': LEADERSHIP_LEVEL_AMOUNT,
         'stripe_publishable_key': settings.STRIPE_PUBLISHABLE_KEY,
         'user': user,
     }
 
 
-@register.inclusion_tag('fundraising/includes/display_django_heros.html')
-def display_django_heros(campaign):
-    individuals = DjangoHero.objects.for_campaign(campaign, hero_type='individual')
-    organizations = DjangoHero.objects.for_campaign(campaign, hero_type='organization')
+@register.inclusion_tag('fundraising/includes/display_django_heroes.html')
+def display_django_heroes():
+    donors = DjangoHero.objects.for_public_display()
+    i = 0
+    for i, donor in enumerate(donors):
+        if donor.donated_amount is not None and donor.donated_amount < LEADERSHIP_LEVEL_AMOUNT:
+            break
+
     return {
-        'individuals': individuals,
-        'organizations': organizations,
+        'corporate_members': CorporateMember.objects.by_membership_level(),
+        'leaders': donors[:i],
+        'heroes': donors[i:],
+        'inkind_donors': InKindDonor.objects.all(),
+        'display_donor_days': DISPLAY_DONOR_DAYS,
+        'display_logo_amount': int(LEADERSHIP_LEVEL_AMOUNT),
+        'corporate_membership_amounts': CORPORATE_MEMBERSHIP_AMOUNTS,
     }

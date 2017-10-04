@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal
 
 from django.db import models
@@ -7,8 +8,11 @@ from django.utils import crypto, timezone
 from django_hosts.resolvers import reverse
 from sorl.thumbnail import ImageField, get_thumbnail
 
-DISPLAY_LOGO_AMOUNT = Decimal("200.00")
+GOAL_AMOUNT = Decimal("200000.00")
+GOAL_START_DATE = datetime.date(2017, 1, 1)
+DISPLAY_DONOR_DAYS = 365
 DEFAULT_DONATION_AMOUNT = 50
+LEADERSHIP_LEVEL_AMOUNT = Decimal("1000.00")
 INTERVAL_CHOICES = (
     ('monthly', 'Monthly donation'),
     ('quarterly', 'Quarterly donation'),
@@ -18,16 +22,12 @@ INTERVAL_CHOICES = (
 
 
 class DjangoHeroManager(models.Manager):
-    def for_campaign(self, campaign, hero_type=None):
+    def for_public_display(self):
         donors = self.get_queryset().filter(
-            donation__campaign=campaign,
             is_visible=True,
             approved=True,
+            donation__payment__date__gt=datetime.date.today() - datetime.timedelta(days=DISPLAY_DONOR_DAYS),
         ).annotate(donated_amount=models.Sum('donation__payment__amount'))
-
-        if hero_type:
-            donors = donors.filter(hero_type=hero_type)
-
         return donors.order_by('-donated_amount', 'name')
 
 
@@ -43,7 +43,7 @@ class FundraisingModel(models.Model):
         self.modified = timezone.now()
         if not self.id:
             self.id = crypto.get_random_string(length=12)
-        return super(FundraisingModel, self).save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
 
 class DjangoHero(FundraisingModel):
@@ -52,6 +52,7 @@ class DjangoHero(FundraisingModel):
     logo = ImageField(upload_to="fundraising/logos/", blank=True)
     url = models.URLField(blank=True, verbose_name='URL')
     name = models.CharField(max_length=100, blank=True)
+    location = models.CharField(max_length=255, blank=True)
     HERO_TYPE_CHOICES = (
         ('individual', 'Individual'),
         ('organization', 'Organization'),
@@ -79,6 +80,10 @@ class DjangoHero(FundraisingModel):
         verbose_name_plural = "Django heroes"
 
     @property
+    def display_name(self):
+        return self.name
+
+    @property
     def thumbnail(self):
         return get_thumbnail(self.logo, '170x170', quality=100)
 
@@ -87,32 +92,10 @@ class DjangoHero(FundraisingModel):
         return self.name if self.name else 'Anonymous Hero'
 
 
-@receiver(post_save, sender=DjangoHero)
-def create_thumbnail_on_save(sender, **kwargs):
-    return kwargs['instance'].thumbnail
-
-
-class Campaign(models.Model):
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=100)
-    goal = models.DecimalField(max_digits=9, decimal_places=2)
-    template = models.CharField(max_length=50, default="fundraising/campaign_default.html")
-    stretch_goal = models.DecimalField(max_digits=9, decimal_places=2, blank=True, null=True)
-    stretch_goal_url = models.URLField(blank=True, null=True)
-    start_date = models.DateTimeField(blank=True, null=True)
-    end_date = models.DateTimeField(blank=True, null=True)
-    is_active = models.BooleanField(default=False, help_text="Should donation form be enabled or not?")
-    is_public = models.BooleanField(default=False, help_text="Should campaign be visible at all?")
-
-    def __str__(self):
-        return self.name
-
-
 class Donation(FundraisingModel):
     interval = models.CharField(max_length=20, choices=INTERVAL_CHOICES, blank=True)
     subscription_amount = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
-    donor = models.ForeignKey(DjangoHero, null=True)
-    campaign = models.ForeignKey(Campaign, null=True, blank=True)
+    donor = models.ForeignKey(DjangoHero, on_delete=models.CASCADE)
     stripe_subscription_id = models.CharField(max_length=100, blank=True)
     stripe_customer_id = models.CharField(max_length=100, blank=True)
     receipt_email = models.EmailField(blank=True)
@@ -123,14 +106,18 @@ class Donation(FundraisingModel):
     def get_absolute_url(self):
         return reverse('fundraising:thank-you', kwargs={'donation': self.id})
 
+    def is_active(self):
+        return bool(self.stripe_subscription_id)
+    is_active.boolean = True
+
     def total_payments(self):
         return self.payment_set.aggregate(models.Sum('amount'))['amount__sum']
 
 
 class Payment(models.Model):
-    donation = models.ForeignKey(Donation)
+    donation = models.ForeignKey(Donation, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=9, decimal_places=2, null=True)
-    stripe_charge_id = models.CharField(max_length=100, blank=True)
+    stripe_charge_id = models.CharField(max_length=100, unique=True)
     date = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -138,10 +125,37 @@ class Payment(models.Model):
 
 
 class Testimonial(models.Model):
-    campaign = models.ForeignKey(Campaign, null=True)
     author = models.CharField(max_length=255)
     body = models.TextField()
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return self.author
+
+
+class InKindDonor(models.Model):
+    name = models.CharField(max_length=100)
+    url = models.URLField(blank=True, verbose_name='URL')
+    description = models.TextField()
+    logo = ImageField(upload_to='fundraising/logos/', blank=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = 'in-kind hero'
+        verbose_name_plural = 'in-kind heroes'
+
+    @property
+    def display_name(self):
+        return self.name
+
+    @property
+    def thumbnail(self):
+        return get_thumbnail(self.logo, '170x170', quality=100)
+
+
+@receiver(post_save, sender=DjangoHero)
+@receiver(post_save, sender=InKindDonor)
+def create_thumbnail_on_save(sender, **kwargs):
+    return kwargs['instance'].thumbnail

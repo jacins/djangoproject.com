@@ -35,21 +35,17 @@ LOGGING["loggers"]["django.request"]["handlers"].append("syslog")
 
 MEDIA_ROOT = str(DATA_DIR.joinpath('media'))
 
-MIDDLEWARE_CLASSES = (['django.middleware.cache.UpdateCacheMiddleware'] +
-                      MIDDLEWARE_CLASSES +
-                      ['django.middleware.cache.FetchFromCacheMiddleware'])
+MIDDLEWARE = (
+    ['django.middleware.cache.UpdateCacheMiddleware'] +
+    MIDDLEWARE +
+    ['django.middleware.cache.FetchFromCacheMiddleware']
+)
 
 SESSION_COOKIE_SECURE = True
 
 STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 STATIC_ROOT = str(DATA_DIR.joinpath('static'))
-
-# django-secure settings
-
-SECURE_HSTS_SECONDS = 31536000  # 1 year
-
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 # Docs settings
 DOCS_BUILD_ROOT = DATA_DIR.joinpath('data', 'docbuilds')
@@ -68,4 +64,3 @@ PUSH_SSL_CALLBACK = True
 if 'sentry_dsn' in SECRETS and not DEBUG:
     INSTALLED_APPS.append('raven.contrib.django.raven_compat')
     RAVEN_CONFIG = {'dsn': SECRETS['sentry_dsn']}
-    LOGGING["loggers"]["django.request"]["handlers"].remove("mail_admins")

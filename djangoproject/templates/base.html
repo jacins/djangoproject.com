@@ -1,5 +1,5 @@
 {% load staticfiles %}<!DOCTYPE html>
-<html lang="en">
+<html lang="{% block html_language_code %}en{% endblock %}">
   <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -20,12 +20,7 @@
 
     <title>{% block title %}The Web framework for perfectionists with deadlines{% endblock %} | Django</title>
 
-    <!--[if lte IE 8]>
-        <link rel="stylesheet" href="{% static "css/output-ie.css" %}" >
-     <![endif]-->
-    <!--[if gt IE 8]><!-->
-        <link rel="stylesheet" href="{% static "css/output.css" %}" >
-    <!--<![endif]-->
+    <link rel="stylesheet" href="{% static "css/output.css" %}" >
     <script src="{% static "js/lib/webfontloader/webfontloader.js" %}"></script>
     <script>
     WebFont.load({
@@ -58,6 +53,20 @@
 
     <div class="container {% block layout_class %}{% endblock %}">
       <div role="main">
+
+        {% block messages %}
+          {% if messages %}
+            <ul class="messages">
+              {% for message in messages %}
+                <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>
+                  {{ message }}
+                  <i class="close icon icon-remove" title="close"></i>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endblock %}
+
         {% block content %}{% endblock %}
         <a href="#top" class="backtotop"><i class="icon icon-chevron-up"></i> Back to Top</a>
       </div>
@@ -89,6 +98,7 @@
             'jquery.inview': ["jquery"],
             'jquery.payment': ["jquery"],
             'jquery.flot': ["jquery"],
+            'jquery.unveil': ["jquery"],
             'stripe': {
               exports: 'Stripe'
             }
@@ -97,8 +107,9 @@
             "jquery": extless("{% static 'js/lib/jquery/dist/jquery.min.js' %}"),
             "jquery.inview": extless("{% static 'js/lib/jquery.inview/jquery.inview.min.js' %}"),
             "jquery.payment": extless("{% static 'js/lib/jquery.payment/lib/jquery.payment.js' %}"),
-            "modernizr-retina-test": extless("{% static 'js/lib/modernizr-retina-test/modernizr-retina-test.js' %}"),
+            "jquery.unveil": extless("{% static 'js/lib/unveil/jquery.unveil.min.js' %}"),
             "jquery.flot": extless("{% static 'js/lib/jquery-flot/jquery.flot.min.js' %}"),
+            "clipboard": extless("{% static 'js/lib/clipboard/dist/clipboard.min.js' %}"),
             "mod/floating-warning": extless("{% static 'js/mod/floating-warning.js' %}"),
             "mod/list-collapsing": extless("{% static 'js/mod/list-collapsing.js' %}"),
             "mod/list-feature": extless("{% static 'js/mod/list-feature.js' %}"),

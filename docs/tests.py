@@ -1,15 +1,20 @@
 import datetime
 import os
+from http import HTTPStatus
+from operator import attrgetter
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib.sites.models import Site
-from django.core.urlresolvers import set_urlconf
 from django.template import Context, Template
 from django.test import TestCase
+from django.urls import reverse, set_urlconf
 
+from djangoproject.urls import www as www_urls
 from releases.models import Release
 
-from .models import DocumentRelease
+from .models import Document, DocumentRelease
+from .sitemaps import DocsSitemap
 from .utils import get_doc_path
 
 
@@ -86,6 +91,65 @@ class ModelsTests(TestCase):
         self.assertFalse(d.is_dev)
 
 
+class ManagerTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        r1 = Release.objects.create(version='1.0')
+        r2 = Release.objects.create(version='2.0')
+        DocumentRelease.objects.bulk_create(
+            DocumentRelease(lang=lang, release=release)
+            for lang, release in [('en', r1), ('en', r2), ('sv', r1), ('ar', r1)]
+        )
+
+    def test_by_version(self):
+        doc_releases = DocumentRelease.objects.by_version('1.0')
+        self.assertEqual(
+            {(r.lang, r.release.version) for r in doc_releases},
+            {('en', '1.0'), ('sv', '1.0'), ('ar', '1.0')}
+        )
+
+    def test_get_by_version_and_lang_exists(self):
+        doc = DocumentRelease.objects.get_by_version_and_lang('1.0', 'en')
+        self.assertEqual(doc.release.version, '1.0')
+        self.assertEqual(doc.lang, 'en')
+
+    def test_get_by_version_and_lang_missing(self):
+        with self.assertRaises(DocumentRelease.DoesNotExist):
+            DocumentRelease.objects.get_by_version_and_lang('2.0', 'sv')
+
+    def test_get_available_languages_by_version(self):
+        get = DocumentRelease.objects.get_available_languages_by_version
+        self.assertEqual(list(get('1.0')), ['ar', 'en', 'sv'])
+        self.assertEqual(list(get('2.0')), ['en'])
+        self.assertEqual(list(get('3.0')), [])
+
+
+class RedirectsTests(TestCase):
+
+    @classmethod
+    def tearDownClass(cls):
+        # cleanup URLconfs changed by django-hosts
+        set_urlconf(None)
+        super().tearDownClass()
+
+    def test_team_url(self):
+        # This URL is linked from the docs.
+        self.assertEqual('/foundation/teams/', reverse('members:teams', urlconf=www_urls))
+
+    def test_internals_team(self):
+        response = self.client.get(
+            '/en/dev/internals/team/',
+            HTTP_HOST='docs.djangoproject.dev:8000',
+        )
+        self.assertRedirects(
+            response,
+            'https://www.djangoproject.com/foundation/teams/',
+            status_code=HTTPStatus.MOVED_PERMANENTLY,
+            fetch_redirect_response=False,
+        )
+
+
 class SearchFormTestCase(TestCase):
     fixtures = ['doc_test_fixtures']
 
@@ -97,7 +161,7 @@ class SearchFormTestCase(TestCase):
     def tearDownClass(cls):
         # cleanup URLconfs changed by django-hosts
         set_urlconf(None)
-        super(SearchFormTestCase, cls).tearDownClass()
+        super().tearDownClass()
 
     def test_empty_get(self):
         response = self.client.get('/en/dev/search/',
@@ -118,20 +182,31 @@ def band_listing(request):
 
 {% endpygment %}
 ''')
-        self.assertEqual(
+        self.assertHTMLEqual(
             template.render(Context()),
-            "\n\n<div class=\"highlight\"><pre><span class=\"k\">def</span> <span class=\"nf\">"
-            "band_listing</span><span class=\"p\">(</span><span class=\"n\">request</span><span "
-            "class=\"p\">):</span>\n    <span class=\"sd\">&quot;&quot;&quot;A view of all bands"
-            ".&quot;&quot;&quot;</span>\n    <span class=\"n\">bands</span> <span class=\"o\">="
-            "</span> <span class=\"n\">models</span><span class=\"o\">.</span><span class=\"n\">"
-            "Band</span><span class=\"o\">.</span><span class=\"n\">objects</span><span "
-            "class=\"o\">.</span><span class=\"n\">all</span><span class=\"p\">()</span>\n    "
-            "<span class=\"k\">return</span> <span class=\"n\">render</span><span class=\"p\">"
-            "(</span><span class=\"n\">request</span><span class=\"p\">,</span> <span class=\"s\">"
-            "&#39;bands/band_listing.html&#39;</span><span class=\"p\">,</span> <span class=\"p\">"
-            "{</span><span class=\"s\">&#39;bands&#39;</span><span class=\"p\">:</span> "
-            "<span class=\"n\">bands</span><span class=\"p\">})</span>\n</pre></div>\n\n"
+            """
+            <div class="highlight">
+                <pre>
+                    <span></span>
+                    <span class="k">def</span><span class="nf">band_listing</span>
+                    <span class="p">(</span><span class="n">request</span>
+                    <span class="p">):</span>
+                    <span class="sd">&quot;&quot;&quot;A view of all bands.&quot;&quot;&quot;</span>
+                    <span class="n">bands</span> <span class="o">=</span>
+                    <span class="n">models</span><span class="o">.</span>
+                    <span class="n">Band</span><span class="o">.</span>
+                    <span class="n">objects</span><span class="o">.</span>
+                    <span class="n">all</span><span class="p">()</span>
+                    <span class="k">return</span> <span class="n">render</span>
+                    <span class="p">(</span><span class="n">request</span>
+                    <span class="p">,</span>
+                    <span class="s1">&#39;bands/band_listing.html&#39;</span>
+                    <span class="p">,</span> <span class="p">{</span>
+                    <span class="s1">&#39;bands&#39;</span><span class="p">:</span>
+                    <span class="n">bands</span><span class="p">})</span>
+                </pre>
+            </div>
+            """
         )
 
 
@@ -143,3 +218,106 @@ class TestUtils(TestCase):
         # existing file
         path, filename = __file__.rsplit(os.path.sep, 1)
         self.assertEqual(get_doc_path(Path(path), filename), None)
+
+
+class UpdateDocTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.release = DocumentRelease.objects.create()
+
+    def test_sync_to_db(self):
+        self.release.sync_to_db([{
+            'body': 'This is the body',
+            'title': 'This is the title',
+            'current_page_name': 'foo/bar',
+        }])
+        self.assertQuerysetEqual(self.release.documents.all(), ['<Document: en/dev/foo/bar>'])
+
+    def test_clean_path(self):
+        self.release.sync_to_db([{
+            'body': 'This is the body',
+            'title': 'This is the title',
+            'current_page_name': 'foo/bar/index',
+        }])
+        self.assertQuerysetEqual(self.release.documents.all(), ['<Document: en/dev/foo/bar>'])
+
+    def test_title_strip_tags(self):
+        self.release.sync_to_db([{
+            'body': 'This is the body',
+            'title': 'This is the <strong>title</strong>',
+            'current_page_name': 'foo/bar',
+        }])
+        self.assertQuerysetEqual(self.release.documents.all(), ['This is the title'], transform=attrgetter('title'))
+
+    def test_title_entities(self):
+        self.release.sync_to_db([{
+            'body': 'This is the body',
+            'title': 'Title &amp; title',
+            'current_page_name': 'foo/bar',
+        }])
+        self.assertQuerysetEqual(self.release.documents.all(), ['Title & title'], transform=attrgetter('title'))
+
+    def test_empty_documents(self):
+        self.release.sync_to_db([
+            {'title': 'Empty body document', 'current_page_name': 'foo/1'},
+            {'body': 'Empty title document', 'current_page_name': 'foo/2'},
+            {'current_page_name': 'foo/3'},
+        ])
+        self.assertQuerysetEqual(self.release.documents.all(), [])
+
+    def test_excluded_documents(self):
+        """
+        Documents aren't created for partially translated documents excluded
+        from robots indexing.
+        """
+        # Read the first Disallow line of robots.txt.
+        robots_path = settings.BASE_DIR.joinpath('djangoproject', 'static', 'robots.docs.txt')
+        with open(str(robots_path), 'r') as fh:
+            for line in fh:
+                if line.startswith("Disallow:"):
+                    break
+        _, lang, version, path = line.strip().split('/')
+
+        release = DocumentRelease.objects.create(
+            lang=lang, release=Release.objects.create(version=version),
+        )
+        release.sync_to_db([
+            {'body': '', 'title': '', 'current_page_name': 'nonexcluded/bar'},
+            {'body': '', 'title': '', 'current_page_name': '%s/bar' % path},
+        ])
+        self.assertQuerysetEqual(
+            release.documents.all(),
+            ['<Document: %s/%s/nonexcluded/bar>' % (lang, version)]
+        )
+
+
+class SitemapTests(TestCase):
+    fixtures = ['doc_test_fixtures']
+
+    @classmethod
+    def tearDownClass(cls):
+        # cleanup URLconfs changed by django-hosts
+        set_urlconf(None)
+        super().tearDownClass()
+
+    def test_sitemap_index(self):
+        response = self.client.get('/sitemap.xml', HTTP_HOST='docs.djangoproject.dev:8000')
+        self.assertContains(response, '<sitemap>', count=2)
+        self.assertContains(response, '<loc>http://docs.djangoproject.dev:8000/sitemap-en.xml</loc>')
+
+    def test_sitemap(self):
+        doc_release = DocumentRelease.objects.create()
+        document = Document.objects.create(release=doc_release)
+        sitemap = DocsSitemap('en')
+        urls = sitemap.get_urls()
+        self.assertEqual(len(urls), 1)
+        url_info = urls[0]
+        self.assertEqual(url_info['location'], document.get_absolute_url())
+
+    def test_sitemap_404(self):
+        response = self.client.get('/sitemap-xx.xml', HTTP_HOST='docs.djangoproject.dev:8000')
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.context['exception'],
+            "No sitemap available for section: 'xx'"
+        )

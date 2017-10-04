@@ -9,11 +9,12 @@ djangoproject.com source code
 
 To run locally, do the usual:
 
-#. Create a virtualenv
+#. Create a Python 3.5 virtualenv
 
 #. Install dependencies::
 
     pip install -r requirements/dev.txt
+    npm install
 
    Alternatively use the make task::
 
@@ -22,14 +23,19 @@ To run locally, do the usual:
 #. Make a directory to store the project's data (MEDIA_ROOT, DOC_BUILDS_ROOT,
    etc.). We'll use ~/.djangoproject for example purposes.
 
-   Create a 'secrets.json' file in a folder named 'conf' in that directory,
+   Create a 'secrets.json' file in a directory named 'conf' in that directory,
    containing something like::
 
     { "secret_key": "xyz",
-      "superfeedr_creds": ["any@email.com", "some_string"] }
+      "superfeedr_creds": ["any@email.com", "some_string"],
+      "db_host": "localhost",
+      "db_password": "secret",
+      "trac_db_host": "localhost",
+      "trac_db_password": "secret" }
 
    Add `export DJANGOPROJECT_DATA_DIR=~/.djangoproject` (without the backticks)
-   to your ~/.bashrc file and then run `source ~/.bashrc` to load the changes.
+   to your ~/.bashrc (or ~/.zshrc if you're using zsh) file and then run
+   `source ~/.bashrc` (or `source ~/.zshrc`) to load the changes.
 
 #. Create databases::
 
@@ -37,6 +43,19 @@ To run locally, do the usual:
     createdb -O djangoproject djangoproject
     createuser -d code.djangoproject
     createdb -O code.djangoproject code.djangoproject
+
+#. Setting up database access
+
+   If you are using the default postgres configuration, chances are you will
+   have to give a password for the newly created users in order to be able to
+   use them for Django::
+
+     psql
+     ALTER USER djangoproject WITH PASSWORD 'secret';
+     ALTER USER "code.djangoproject" WITH PASSWORD 'secret';
+     \d
+
+   (Use the same passwords as the ones you've used in your `secrets.json` file)
 
 #. Create tables::
 
@@ -59,7 +78,18 @@ To run locally, do the usual:
 
 #. For dashboard::
 
+   To load the latest dashboard categories and metrics::
+
+    ./manage.py loaddata dashboard_production_metrics
+
+   Alternatively, to load a full set of sample data (takes a few minutes)::
+
     ./manage.py loaddata dashboard_example_data
+
+   Finally, make sure the loaded metrics have at least one data point (this
+   makes API calls to the URLs from the metrics objects loaded above and may
+   take some time depending on the metrics chosen)::
+
     ./manage.py update_metrics
 
 #. Point the ``www.djangoproject.dev``, ``docs.djangoproject.dev`` and ``dashboard.djangoproject.dev``
@@ -74,8 +104,13 @@ To run locally, do the usual:
    both require admin privileges, just like you'd need when editing
    ``/etc/hosts`` with your favorite editor.
 
-.. _`Hosts.prefpane`: https://github.com/specialunderwear/Hosts.prefpane
-.. _`built-in network admin`: https://help.ubuntu.com/community/NetworkAdmin
+   If you don't have admin rights but have an internet connection, you can use a
+   service like `xip.io <http://xip.io>`_. In that case you'll also have to
+   update `ALLOWED_HOSTS` in `djangoproject/settings/dev.py` as well as the
+   content of the `django_site` table in your database.
+
+   .. _`Hosts.prefpane`: https://github.com/specialunderwear/Hosts.prefpane
+   .. _`built-in network admin`: https://help.ubuntu.com/community/NetworkAdmin
 
 #. Compile the CSS (only the source SCSS files are stored in the repostiory)::
 
@@ -102,7 +137,7 @@ Our test results can be found here:
     https://travis-ci.org/django/djangoproject.com
 
 For local development don't hesitate to install
-`tox <http://tox.readthedocs.org/>`_ to run the website's test suite.
+`tox <https://tox.readthedocs.io/>`_ to run the website's test suite.
 
 Then in the root directory (next to the ``manage.py`` file) run::
 
@@ -110,7 +145,7 @@ Then in the root directory (next to the ``manage.py`` file) run::
 
 Behind the scenes this will run the usual ``./manage.py test`` management
 command with a preset list of apps that we want to test as well as
-`flake8 <http://flake8.readthedocs.org/>`_ for code quality checks. We
+`flake8 <https://flake8.readthedocs.io/>`_ for code quality checks. We
 collect test coverage data as part of that tox run, to show the result
 simply run::
 
@@ -144,13 +179,10 @@ SVG, webfonts.
 We're following `Mozilla's example <https://wiki.mozilla.org/Support/Browser_Support>`_
 when it comes to categorize browser support.
 
-- Any browser other than IE8 and lower as **A grade**. Which means everything
-  needs to work on those.
+- Desktop browsers, except as noted below, are **A grade**, meaning that
+  everything needs to work.
 
-- IE8 is **B grade**, meaning that some functionality may be disabled, visual
-  variations are acceptable but the content must work nevertheless.
-
-- IE below 8 is **not supported**.
+- IE < 11 is **not supported** (based on Microsoft's support).
 
 - Mobile browsers should be considered **B grade** as well.
   Mobile Safari, Firefox on Android and the Android Browser should support
@@ -207,12 +239,23 @@ Check out the ``Procfile`` file for all the process names.
 JavaScript libraries
 --------------------
 
-This project uses `Bower <http://bower.io/>`_ for managing JS library
-dependencies. See its documentation for how to use it. Here's the gist:
+This project uses `Bower <https://bower.io/>`_ to manage JavaScript libraries.
 
-To update any of the dependencies, edit the ``bower.json`` file accordingly
-and then run ``bower install`` to download the appropriate files to the
-static directory. Commit the downloaded files to git (vendoring).
+At any time, you can run it to install a new library (e.g., ``jquery-ui``)::
+
+    npm run bower install jquery-ui --save
+
+or check if there are newer versions of the libraries that we use::
+
+    npm run bower ls
+
+If you need to update an existing library, the easiest way is to change the
+version requirement in ``bower.json`` and then to run
+``npm run bower install`` again.
+
+We commit the libraries to the repository, so if you add, update, or remove a
+library from ``bower.json``, you will need to commit the changes in
+``djangoproject/static`` too.
 
 Documentation search
 --------------------
@@ -232,4 +275,17 @@ This is also the right command to run when you work on the search feature
 itself. You can pass the ``-d`` option to try to drop the search index
 first before indexing all the documents.
 
-.. _`official Elasticsearch docs`: http://www.elastic.co/guide/en/elasticsearch/reference/current/setup.html
+.. _`official Elasticsearch docs`: https://www.elastic.co/guide/en/elasticsearch/reference/current/setup.html
+
+Updating metrics from production
+--------------------------------
+
+The business logic for dashboard metrics is edited via the admin interface and
+contained in the models in the ``dashboard`` app (other than ``Dataum``, which
+contains the data itself). From time to time, those metrics should be extracted
+from a copy of the production database and saved to the
+``dashboard/fixtures/dashboard_production_metrics.json`` file.
+
+To update this file, run::
+
+    ./manage.py dumpdata dashboard --exclude dashboard.Datum --indent=4 > dashboard_production_metrics.json

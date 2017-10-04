@@ -5,7 +5,29 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import models
 from django.utils.functional import cached_property
-from django.utils.version import get_version
+from django.utils.version import get_complete_version, get_main_version
+
+
+# A version of django.utils.version.get_version() which maps "rc" to "rc"
+# (packages generated using setuptools 8+) instead of "c" (older versions of
+# setuptools). This naming schemes starts with Django 1.9 and we don't care
+# about older release candidates. Safe to use Django's copy of get_version()
+# when upgrading this website to use Django 1.10.
+def get_version(version=None):
+    "Return a PEP 386-compliant version number from VERSION."
+    version = get_complete_version(version)
+
+    # Now build the two parts of the version number:
+    # main = X.Y[.Z]
+    # sub = {a|b|rc}N - for alpha, beta and rc releases
+    main = get_main_version(version)
+
+    sub = ''
+    if version[3] != 'final':
+        mapping = {'alpha': 'a', 'beta': 'b', 'rc': 'rc'}
+        sub = mapping[version[3]] + str(version[4])
+
+    return str(main + sub)
 
 
 class ReleaseManager(models.Manager):
@@ -154,7 +176,7 @@ class Release(models.Model):
         self.major, self.minor, self.micro, status, self.iteration = self.version_tuple
         self.status = self.STATUS_REVERSE[status]
         cache.delete(self.DEFAULT_CACHE_KEY)
-        super(Release, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
         # Each micro release EOLs the previous one in the same series.
         if self.status == 'f' and self.micro > 0:
             (type(self).objects
@@ -183,56 +205,28 @@ class Release(models.Model):
         return tuple(version)
 
     def get_redirect_url(self, kind):
-        # Hacks to account for the history of Django.
-        # Some 0.9x.y releases failed and were replaced by the next one.
-        superseded_by = {
-            '0.91.1': '0.91.2',
-            '0.95.2': '0.95.3',
-            '0.96.1': '0.96.2',
-        }.get(self.version)
-        # Early 1.x.y releases had a different directory tree.
-        has_subdir = (1, 0, 1), (1, 0, 2), (1, 0, 3), (1, 0, 4), (1, 1, 1)
-        if self.version_tuple[:3] in has_subdir:
-            directory = '%d.%d.%d' % self.version_tuple[:3]
-        else:
-            directory = '%d.%d' % self.version_tuple[:2]
+        directory = '%d.%d' % self.version_tuple[:2]
         # Django gained PEP 386 numbering in 1.4b1.
         if self.version_tuple >= (1, 4, 0, 'beta', 0):
             actual_version = get_version(self.version_tuple)
-        # Early 1.0.x tarballs were named inconsistently.
         else:
-            actual_version = {
-                '1.0-alpha-2': '1.0-alpha_2',
-                '1.0-beta-1': '1.0-beta_1',
-                '1.0-beta-2': '1.0-beta_2',
-                '1.0.1-beta-1': '1.0.1_beta_1',
-                '1.0.1': '1.0.1-final',
-                '1.0.2': '1.0.2-final',
-            }.get(self.version, self.version)
+            actual_version = self.version
 
         if kind == 'tarball':
-            if superseded_by:
-                pattern = '/download/%(superseded_by)s/tarball/'
-            else:
-                pattern = '%(media)sreleases/%(directory)s/Django-%(version)s.tar.gz'
+            pattern = '%(media)sreleases/%(directory)s/Django-%(version)s.tar.gz'
 
         elif kind == 'checksum':
             if self.version_tuple[:3] >= (1, 0, 4):
                 pattern = '%(media)spgp/Django-%(version)s.checksum.txt'
             else:
                 raise ValueError('No checksum for this version')
-
-        elif kind == 'egg':
-            if self.version_tuple[:3] in [(0, 90, 0), (0, 91, 0)]:
-                pattern = '%(media)sreleases/%(version)s/Django-%(version)s-py2.4.egg'
-            else:
-                raise ValueError('No egg for this version')
+        else:
+            raise ValueError('Unknown file')
 
         return pattern % {
             'media': settings.MEDIA_URL,
             'directory': directory,
             'version': actual_version,
-            'superseded_by': superseded_by,
             'major': self.version_tuple[0],
             'minor': self.version_tuple[1],
         }

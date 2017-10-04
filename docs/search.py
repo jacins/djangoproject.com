@@ -1,8 +1,11 @@
+import elasticsearch
 from django.core.paginator import EmptyPage, Page, PageNotAnInteger, Paginator
 from django.utils.html import strip_tags
 from django.utils.text import unescape_entities
 from elasticsearch.helpers import streaming_bulk
-from elasticsearch_dsl import DocType, Long, Nested, Object, String, analysis
+from elasticsearch_dsl import (
+    DocType, Keyword, Long, Nested, Object, Text, analysis,
+)
 from elasticsearch_dsl.connections import connections
 
 from .models import Document, document_url
@@ -66,23 +69,16 @@ class SearchPaginator(Paginator):
 class ImprovedDocType(DocType):
 
     @classmethod
-    def index_all(cls, using=None, delete=False, **kwargs):
+    def index_all(cls, index_name, using=None, **kwargs):
         def actions_generator():
             for obj in cls.index_queryset().iterator():
-                doc_dict = cls.from_django(obj).to_dict()
-                doc_dict['_id'] = obj.id
-                yield doc_dict
+                elastic_data = cls.from_django(obj).to_dict(include_meta=True)
+                elastic_data['_index'] = index_name
+                yield elastic_data
 
         client = connections.get_connection(using or cls._doc_type.using)
-        if delete:
-            client.indices.delete(index=cls._doc_type.index, ignore=[400, 404])
-        cls._doc_type.init()
-        for ok, item in streaming_bulk(client, actions_generator(),
-                                       index=cls._doc_type.index,
-                                       doc_type=cls._doc_type.name,
-                                       raise_on_error=True,
-                                       refresh=True,
-                                       **kwargs):
+        cls.init(index_name)
+        for ok, item in streaming_bulk(client, actions_generator(), chunk_size=90, **kwargs):
             yield ok, item
 
     @classmethod
@@ -142,18 +138,18 @@ class DocumentDocType(ImprovedDocType):
     model = Document
 
     id = Long()
-    title = String(analyzer=lower_whitespace_analyzer, boost=1.2)
-    path = String(index='no', analyzer=path_analyzer)
-    content = String(analyzer=lower_whitespace_analyzer)
-    content_raw = String(index_options='offsets')
+    title = Text(analyzer=lower_whitespace_analyzer, boost=1.2)
+    path = Text(index='no', analyzer=path_analyzer)
+    content = Text(analyzer=lower_whitespace_analyzer)
+    content_raw = Text(index_options='offsets')
     release = Object(properties={
         'id': Long(),
-        'version': String(index='not_analyzed'),
-        'lang': String(index='not_analyzed'),
+        'version': Keyword(),
+        'lang': Keyword(),
     })
     breadcrumbs = Nested(properties={
-        'title': String(index='not_analyzed'),
-        'path': String(index='not_analyzed'),
+        'title': Keyword(),
+        'path': Keyword(),
     })
 
     class Meta:
@@ -161,8 +157,29 @@ class DocumentDocType(ImprovedDocType):
         doc_type = 'document'
 
     @classmethod
+    def alias_to_main_index(cls, index_name, using=None):
+        """
+        Alias `index_name` to 'docs' (`cls._doc_type.index`).
+        """
+        body = {'actions': [{'add': {'index': index_name, 'alias': cls._doc_type.index}}]}
+
+        client = connections.get_connection(using or cls._doc_type.using)
+        client.indices.refresh(index=index_name)
+        try:
+            old_index_name = list(client.indices.get_alias('docs').keys())[0]
+        except elasticsearch.exceptions.NotFoundError:
+            old_index_name = None
+        else:
+            body['actions'].append({'remove': {'index': old_index_name, 'alias': cls._doc_type.index}})
+
+        client.indices.update_aliases(body=body)
+        # Delete the old index that was aliased to 'docs'.
+        if old_index_name:
+            client.indices.delete(old_index_name)
+
+    @classmethod
     def index_queryset(cls):
-        qs = super(DocumentDocType, cls).index_queryset()
+        qs = super().index_queryset()
         return (
             # don't index the module pages since source code is hard to
             # combine with full text search

@@ -9,31 +9,20 @@ from django.forms.models import modelformset_factory
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from .exceptions import DonationError
 from .forms import DjangoHeroForm, DonationForm, PaymentForm
-from .models import Campaign, DjangoHero, Donation, Payment, Testimonial
+from .models import (
+    LEADERSHIP_LEVEL_AMOUNT, DjangoHero, Donation, Payment, Testimonial,
+)
 
 
 def index(request):
-    campaigns = Campaign.objects.filter(is_public=True, is_active=True)
-    if len(campaigns) == 1:
-        return redirect('fundraising:campaign', slug=campaigns[0].slug)
-
+    testimonial = Testimonial.objects.filter(is_active=True).order_by('?').first()
     return render(request, 'fundraising/index.html', {
-        'campaigns': campaigns,
-    })
-
-
-def campaign(request, slug):
-    filter_params = {} if request.user.is_staff else {'is_public': True}
-    campaign = get_object_or_404(Campaign, slug=slug, **filter_params)
-    testimonial = Testimonial.objects.filter(campaign=campaign, is_active=True).order_by('?').first()
-
-    return render(request, campaign.template, {
-        'campaign': campaign,
         'testimonial': testimonial,
     })
 
@@ -76,19 +65,18 @@ def thank_you(request, donation):
         if form.is_valid():
             form.save()
             messages.success(request, "Thank you! You're a Hero.")
-            return redirect(
-                **{'to': 'fundraising:campaign', 'slug': donation.campaign.slug}
-                if donation.campaign else {'to': 'fundraising:index'}
-            )
+            return redirect('fundraising:index')
     else:
         form = DjangoHeroForm(instance=donation.donor)
 
     return render(request, 'fundraising/thank-you.html', {
         'donation': donation,
         'form': form,
+        'leadership_level_amount': LEADERSHIP_LEVEL_AMOUNT,
     })
 
 
+@never_cache
 def manage_donations(request, hero):
     hero = get_object_or_404(DjangoHero, pk=hero)
     recurring_donations = hero.donation_set.exclude(stripe_subscription_id='')
@@ -140,10 +128,12 @@ def update_card(request):
     return JsonResponse(data)
 
 
-def cancel_donation(request, hero, donation):
+@require_POST
+def cancel_donation(request, hero):
+    donation_id = request.POST.get('donation')
     hero = get_object_or_404(DjangoHero, pk=hero)
     donations = hero.donation_set.exclude(stripe_subscription_id='')
-    donation = get_object_or_404(donations, pk=donation)
+    donation = get_object_or_404(donations, pk=donation_id)
 
     customer = stripe.Customer.retrieve(donation.stripe_customer_id)
     customer.subscriptions.retrieve(donation.stripe_subscription_id).delete()
@@ -151,6 +141,7 @@ def cancel_donation(request, hero, donation):
     donation.stripe_subscription_id = ''
     donation.save()
 
+    messages.success(request, "Your donation has been canceled.")
     return redirect('fundraising:manage-donations', hero=hero.pk)
 
 
@@ -171,7 +162,7 @@ def receive_webhook(request):
     return WebhookHandler(event).handle()
 
 
-class WebhookHandler(object):
+class WebhookHandler:
     def __init__(self, event):
         self.event = event
 
@@ -193,8 +184,8 @@ class WebhookHandler(object):
         donation = get_object_or_404(
             Donation, stripe_subscription_id=invoice.subscription)
         amount = decimal.Decimal(invoice.total) / 100
-        Payment.objects.create(
-            donation=donation, amount=amount, stripe_charge_id=invoice.charge)
+        if invoice.charge:
+            donation.payment_set.create(amount=amount, stripe_charge_id=invoice.charge)
         return HttpResponse(status=201)
 
     def subscription_cancelled(self):

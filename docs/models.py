@@ -6,8 +6,10 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import models
+from django.db import models, transaction
 from django.utils.functional import cached_property
+from django.utils.html import strip_tags
+from django.utils.text import unescape_entities
 from django_hosts.resolvers import reverse
 
 from releases.models import Release
@@ -40,8 +42,14 @@ class DocumentReleaseManager(models.Manager):
             )
         return current_version
 
+    def by_version(self, version):
+        return self.filter(**{'release__isnull': True} if version == 'dev' else {'release': version})
+
     def get_by_version_and_lang(self, version, lang):
-        return self.get(lang=lang, **{'release__isnull': True} if version == 'dev' else {'release': version})
+        return self.by_version(version).get(lang=lang)
+
+    def get_available_languages_by_version(self, version):
+        return self.by_version(version).values_list('lang', flat=True).order_by('lang')
 
 
 class DocumentRelease(models.Model):
@@ -50,8 +58,13 @@ class DocumentRelease(models.Model):
     """
     DEFAULT_CACHE_KEY = "%s_docs_version" % settings.CACHE_MIDDLEWARE_KEY_PREFIX
 
-    lang = models.CharField(max_length=2, choices=settings.LANGUAGES, default='en')
-    release = models.ForeignKey(Release, null=True, limit_choices_to={'status': 'f'})
+    lang = models.CharField(max_length=7, choices=settings.LANGUAGES, default='en')
+    release = models.ForeignKey(
+        Release,
+        null=True,
+        limit_choices_to={'status': 'f'},
+        on_delete=models.CASCADE,
+    )
     is_default = models.BooleanField(default=False)
 
     objects = DocumentReleaseManager()
@@ -78,7 +91,7 @@ class DocumentRelease(models.Model):
                 self.version,
                 settings.CACHE_MIDDLEWARE_SECONDS,
             )
-        super(DocumentRelease, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     @property
     def version(self):
@@ -117,6 +130,45 @@ class DocumentRelease(models.Model):
             url += '@stable/' + self.version + '.x'
         return url
 
+    @transaction.atomic
+    def sync_to_db(self, decoded_documents):
+        """
+        Sync the given list of documents (decoded fjson files from sphinx) to
+        the database. Deletes all the release's documents first then
+        reinserts them as needed.
+        """
+        self.documents.all().delete()
+
+        # Read excluded paths from robots.docs.txt.
+        robots_path = settings.BASE_DIR.joinpath('djangoproject', 'static', 'robots.docs.txt')
+        with open(str(robots_path), 'r') as fh:
+            excluded_paths = [
+                line.strip().split('/')[-1] for line in fh
+                if line.startswith("Disallow: /%s/%s/" % (self.lang, self.release_id))
+            ]
+
+        for document in decoded_documents:
+            if ('body' not in document or 'title' not in document or
+                    document['current_page_name'].split('/')[0] in excluded_paths):
+                # We don't care about indexing documents with no body or title, or partially translated
+                continue
+
+            Document.objects.create(
+                release=self,
+                path=_clean_document_path(document['current_page_name']),
+                title=unescape_entities(strip_tags(document['title'])),
+            )
+
+
+def _clean_document_path(path):
+    # We have to be a bit careful to reverse-engineer the correct
+    # relative path component, especially for "index" documents,
+    # otherwise the search results will be incorrect.
+    if path.endswith('/index'):
+        path = path[:-6]
+
+    return path
+
 
 def document_url(doc):
     if doc.path:
@@ -153,7 +205,11 @@ class Document(models.Model):
     """
     An individual document. Used mainly as a hook point for the search.
     """
-    release = models.ForeignKey(DocumentRelease, related_name='documents')
+    release = models.ForeignKey(
+        DocumentRelease,
+        related_name='documents',
+        on_delete=models.CASCADE,
+    )
     path = models.CharField(max_length=500)
     title = models.CharField(max_length=500)
 

@@ -1,3 +1,5 @@
+from distutils.version import StrictVersion
+
 from django import template
 from django.utils.safestring import mark_safe
 from pygments import highlight
@@ -25,7 +27,7 @@ def search_form(context):
     }
 
 
-@register.assignment_tag(takes_context=True)
+@register.simple_tag(takes_context=True)
 def get_all_doc_versions(context, url=None):
     """
     Get a list of all versions of this document to link to.
@@ -33,10 +35,6 @@ def get_all_doc_versions(context, url=None):
     Usage: {% get_all_doc_versions <url> as "varname" %}
     """
     lang = context.get('lang', 'en')
-    if url is None:
-        versions = DocumentRelease.objects.filter(lang=lang).order_by('release')
-        return versions.value_list('release', flat=True)
-
     versions = []
 
     # Look for each version of the docs.
@@ -48,7 +46,8 @@ def get_all_doc_versions(context, url=None):
                 versions.append(release.version)
 
     # Save the versions into the context
-    return sorted(versions)
+    versions = sorted(StrictVersion(x) for x in versions if x != 'dev')
+    return [str(x) for x in versions] + ['dev']
 
 
 class PygmentsNode(template.Node):

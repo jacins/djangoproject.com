@@ -28,8 +28,6 @@ CACHE_MIDDLEWARE_SECONDS = 60 * 5  # 5 minutes
 
 CACHE_MIDDLEWARE_KEY_PREFIX = 'django'
 
-CSRF_COOKIE_HTTPONLY = True
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
@@ -58,20 +56,19 @@ INSTALLED_APPS = [
     'accounts',
     'aggregator',
     'blog',
-    'cla',
     'contact',
     'dashboard',
     'docs.apps.DocsConfig',
     'legacy',
+    'members',
     'releases',
     'svntogit',
     'tracdb',
     'fundraising',
 
-    'flat',
-    'djangosecure',
     'registration',
     'django_hosts',
+    'markdownx',
     'sorl.thumbnail',
 
     'django.contrib.sites',
@@ -96,6 +93,10 @@ LOGGING = {
     "formatters": {
         "simple": {"format": "[%(name)s] %(levelname)s: %(message)s"},
         "full": {"format": "%(asctime)s [%(name)s] %(levelname)s: %(message)s"},
+        'django.server': {
+            '()': 'django.utils.log.ServerFormatter',
+            'format': '[%(server_time)s] %(message)s',
+        },
     },
     "filters": {
         "require_debug_false": {
@@ -103,30 +104,37 @@ LOGGING = {
         },
     },
     "handlers": {
-        "mail_admins": {
-            "level": "ERROR",
-            "filters": ['require_debug_false'],
-            "class": "django.utils.log.AdminEmailHandler",
-        },
         "console": {
             "level": "DEBUG",
             "class": "logging.StreamHandler",
             "formatter": "simple",
         },
+        'django.server': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'django.server',
+        },
     },
     "loggers": {
         "django.request": {
-            "handlers": ["mail_admins"],
+            "handlers": [],
             "level": "ERROR",
             "propagate": False,
+        },
+        'django.server': {
+            'handlers': ['django.server'],
+            'level': 'INFO',
+            'propagate': False,
         },
     }
 }
 
+LOGIN_REDIRECT_URL = 'edit_profile'
+
 MEDIA_URL = '/m/'
 
-MIDDLEWARE_CLASSES = [
-    'djangosecure.middleware.SecurityMiddleware',
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'django_hosts.middleware.HostsRequestMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -140,9 +148,18 @@ MIDDLEWARE_CLASSES = [
     'django_hosts.middleware.HostsResponseMiddleware',
 ]
 
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'accounts.hashers.PBKDF2WrappedSHA1PasswordHasher',
+]
+
 ROOT_URLCONF = 'djangoproject.urls.www'
 
 SECRET_KEY = str(SECRETS['secret_key'])
+
+SECURE_BROWSER_XSS_FILTER = True
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTOCOL", "https")
 
@@ -152,6 +169,8 @@ SESSION_COOKIE_HTTPONLY = True
 
 SILENCED_SYSTEM_CHECKS = [
     'fields.W342',  # tracdb has ForeignKey(unique=True) in lieu of multi-col PKs
+    'security.W008',  # SSL redirect is handled by nginx
+    'security.W009',  # SECRET_KEY is setup through Ansible secrets
 ]
 
 SITE_ID = 1
@@ -171,6 +190,9 @@ TEMPLATES = [
         'DIRS': [str(PROJECT_PACKAGE.joinpath('templates'))],
         'APP_DIRS': True,
         'OPTIONS': {
+            'builtins': [
+                'django_hosts.templatetags.hosts_override',
+            ],
             'context_processors': [
                 'django.contrib.auth.context_processors.auth',
                 'django.template.context_processors.debug',
@@ -195,12 +217,6 @@ USE_L10N = False
 
 USE_TZ = False
 
-# django-secure settings
-
-SECURE_BROWSER_XSS_FILTER = True
-
-SECURE_CONTENT_TYPE_NOSNIFF = True
-
 # django-contact-form / Akismet settings
 
 AKISMET_API_KEY = "c892e4962244"
@@ -208,8 +224,6 @@ AKISMET_API_KEY = "c892e4962244"
 # django-hosts settings
 
 DEFAULT_HOST = 'www'
-
-HOST_OVERRIDE_URL_TAG = True
 
 HOST_SCHEME = 'http'
 
@@ -220,6 +234,8 @@ ROOT_HOSTCONF = 'djangoproject.hosts'
 # django-registration settings
 
 ACCOUNT_ACTIVATION_DAYS = 3
+
+REGISTRATION_EMAIL_HTML = False
 
 # aggregator / PubSubHubbub settings
 

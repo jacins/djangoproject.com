@@ -3,10 +3,12 @@ import json
 
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.sitemaps.views import x_robots_tag
 from django.contrib.sites.models import Site
 from django.core.paginator import InvalidPage
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
+from django.template.response import TemplateResponse
 from django.utils.translation import activate, ugettext_lazy as _
 from django.views import static
 from django.views.decorators.cache import cache_page
@@ -49,6 +51,11 @@ def document(request, lang, version, url):
     if lang != 'en':
         activate(lang)
 
+    canonical_version = DocumentRelease.objects.current_version()
+    canonical = version == canonical_version
+    if version == 'stable':
+        version = canonical_version
+
     docroot = get_doc_root_or_404(lang, version)
     doc_path = get_doc_path_or_404(docroot, url)
     try:
@@ -58,21 +65,26 @@ def document(request, lang, version, url):
 
     if version == 'dev':
         rtd_version = 'latest'
-    elif version >= '1.5':
-        rtd_version = version + '.x'
     else:
-        rtd_version = version + '.X'
+        rtd_version = version + '.x'
 
     template_names = [
         'docs/%s.html' % str(doc_path.relative_to(docroot)).replace(str(doc_path.suffix), ''),
         'docs/doc.html',
     ]
 
+    def load_json_file(path):
+        with path.open('r') as f:
+            return json.load(f)
+
     context = {
-        'doc': json.load(doc_path.open('r')),
-        'env': json.load((docroot.joinpath('globalcontext.json')).open('r')),
+        'doc': load_json_file(doc_path),
+        'env': load_json_file(docroot.joinpath('globalcontext.json')),
         'lang': lang,
         'version': version,
+        'canonical_version': canonical_version,
+        'canonical': canonical,
+        'available_languages': DocumentRelease.objects.get_available_languages_by_version(version),
         'release': release,
         'rtd_version': rtd_version,
         'docurl': url,
@@ -175,7 +187,8 @@ def search_results(request, lang, version, per_page=10, orphans=3):
                                       .filter('term', release__lang=release.lang)
                                       .filter('term', release__version=release.version)
                                       .highlight_options(order='score')
-                                      .highlight('content_raw'))
+                                      .highlight('content_raw')
+                                      .extra(min_score=.01))
 
             page_number = request.GET.get('page') or 1
             paginator = SearchPaginator(results, per_page=per_page, orphans=orphans)
@@ -238,7 +251,7 @@ def search_suggestions(request, lang, version, per_page=20):
                                                            default_operator='and'))
                             .filter('term', release__lang=release.lang)
                             .filter('term', release__version=release.version)
-                            .fields(['title', '_source']))
+                            .source(includes=['title']))
 
             suggestions.append(q)
             titles = []
@@ -246,7 +259,7 @@ def search_suggestions(request, lang, version, per_page=20):
             content_type = ContentType.objects.get_for_model(Document)
             results = search[0:per_page].execute()
             for result in results:
-                titles.append(result.title[0])
+                titles.append(result.title)
                 kwargs = {
                     'content_type_id': content_type.pk,
                     'object_id': result.meta.id,
@@ -257,6 +270,7 @@ def search_suggestions(request, lang, version, per_page=20):
             suggestions.append(links)
 
     return JsonResponse(suggestions, safe=False)
+
 
 if not settings.DEBUG:
     # 1 hour to handle the many requests
@@ -278,6 +292,25 @@ def search_description(request, lang, version):
     return render(request, 'docs/search_description.xml', context,
                   content_type='application/opensearchdescription+xml')
 
+
 if not settings.DEBUG:
     # 1 week because there is no need to render it more often
     search_description = cache_page(60 * 60 * 24 * 7)(search_description)
+
+
+@x_robots_tag
+def sitemap_index(request, sitemaps):
+    """
+    Simplified version of django.contrib.sitemaps.views.index that uses
+    django_hosts for URL reversing.
+    """
+    sites = []
+    for section in sitemaps.keys():
+        sitemap_url = reverse('document-sitemap', host='docs', kwargs={'section': section})
+        sites.append(sitemap_url)
+    return TemplateResponse(
+        request,
+        'sitemap_index.xml',
+        {'sitemaps': sites},
+        content_type='application/xml',
+    )
